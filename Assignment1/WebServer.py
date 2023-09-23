@@ -9,8 +9,8 @@ def echoServer():
     return serverSocket
 
 
-"""Protocol class that encapsulates a message, connectionSocket, 
-   and insert, update, deletion methods for the key and counter 
+"""Protocol class that encapsulates a message, connectionSocket,
+   and insert, update, deletion methods for the key and counter
    stores
 """
 
@@ -46,12 +46,28 @@ class Protocol:
             this.delete()
 
     def post(this):
+        # headerIndex = this.parsedMessage.index("content-length")
+        # this.parsedMessage = this.parsedMessage[headerIndex:]
+        # print(this.parsedMessage)
         contentLength = int(this.parsedMessage[3])
-        content = this.parsedMessage[5]
+        # for i in range(2, len(this.parsedMessage)):
+        # if this.parsedMessage[i] == "":
+        # break
+        # else:
+        # this.parsedMessage.remove(this.parsedMessage[i])
+        # print(this.parsedMessage)
+        # content = this.parsedMessage[5]
+        content = ""
+        for i in range(5, len(this.parsedMessage)):
+            content += this.parsedMessage[i] + " "
+        print(content)
+        excess = content[contentLength:-1]
+        content = content[0:contentLength]
+        print(content, len(content), excess, len(excess))
         numFiller = 28 if this.keyOrCounter == "key" else 32
         batchedRequest = False
         endIndex = 0
-        if len(content) != contentLength:
+        if excess != "":
             batchedRequest = True
             endIndex = (
                 numFiller + len(this.keyName) + len(str(contentLength)) + contentLength
@@ -211,6 +227,7 @@ def main():
         connectionSocket, clientAddr = serverSocket.accept()
         while True:
             message = connectionSocket.recv(2048)
+            print(f"Message Received Length: {len(message)}")
             if len(message) == 0:
                 connectionSocket.close()
                 break
