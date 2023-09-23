@@ -1,5 +1,4 @@
 import sys
-import re
 from socket import *
 
 
@@ -141,17 +140,14 @@ class Protocol:
                 )
                 print("sending 200")
                 this.connectionSocket.send(contentResponse.encode())
-                for i in range(len(this.message)):
-                    if this.message[i] == " ":
-                        counter += 1
-                if this.message[-1] != " " or counter > 3:
-                    endIndex = numFiller + len(this.keyName)
-                    this.parse(this.message[endIndex:], this.connectionSocket)
-                return
             else:
                 contentResponse = "200 OK Content-Length 8  Infinity"
                 print("sending 200")
                 this.connectionSocket.send(contentResponse.encode())
+        if this.message[-1] != " " or counter > 3:
+            endIndex = numFiller + len(this.keyName)
+            print("im recursing")
+            this.parse(this.message[endIndex:], this.connectionSocket)
         print(f"Counter Store: {Protocol.counterStore}, Key Store: {Protocol.keyStore}")
 
     def delete(this):
