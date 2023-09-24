@@ -37,6 +37,8 @@ class Protocol:
         pathParts = path.split("/")
         this.keyOrCounter = pathParts[1].lower()
         this.keyName = pathParts[2]
+        this.newParsedMessage = this.parsedMessage[2:]
+        print(this.newParsedMessage)
 
         if method == "POST":
             this.post()
@@ -46,10 +48,24 @@ class Protocol:
             this.delete()
 
     def post(this):
+        j = 0
+        for i in range(len(this.newParsedMessage)):
+            if this.newParsedMessage[i].lower() == "content-length":
+                j = i
+                break
+        this.newParsedMessage = this.newParsedMessage[j:]
+        print(this.newParsedMessage)
         # headerIndex = this.parsedMessage.index("content-length")
         # this.parsedMessage = this.parsedMessage[headerIndex:]
         # print(this.parsedMessage)
-        contentLength = int(this.parsedMessage[3])
+        contentLength = int(this.newParsedMessage[1])
+        for i in range(len(this.newParsedMessage)):
+            if this.newParsedMessage[i] == "":
+                j = i + 1
+                break
+        this.newParsedMessage = this.newParsedMessage[j:]
+        print(this.newParsedMessage)
+        # contentLength = int(this.parsedMessage[3])
         # for i in range(2, len(this.parsedMessage)):
         # if this.parsedMessage[i] == "":
         # break
@@ -58,8 +74,8 @@ class Protocol:
         # print(this.parsedMessage)
         # content = this.parsedMessage[5]
         content = ""
-        for i in range(5, len(this.parsedMessage)):
-            content += this.parsedMessage[i] + " "
+        for i in range(len(this.newParsedMessage)):
+            content += this.newParsedMessage[i] + " "
         print(content)
         excess = content[contentLength:-1]
         content = content[0:contentLength]
@@ -69,10 +85,10 @@ class Protocol:
         endIndex = 0
         if excess != "":
             batchedRequest = True
-            endIndex = (
-                numFiller + len(this.keyName) + len(str(contentLength)) + contentLength
-            )
-            content = content[0:contentLength]
+            # endIndex = (
+            #    numFiller + len(this.keyName) + len(str(contentLength)) + contentLength
+            # )
+            # content = content[0:contentLength]
         if this.keyOrCounter == "key":
             if (this.keyName in Protocol.counterStore) and Protocol.counterStore[
                 this.keyName
@@ -87,7 +103,7 @@ class Protocol:
                 )
                 this.connectionSocket.send(b"200 OK  ")
             if batchedRequest:
-                this.parse(this.message[endIndex:], this.connectionSocket)
+                this.parse(excess, this.connectionSocket)
         elif this.keyOrCounter == "counter":
             if this.keyName not in Protocol.keyStore:
                 print("sending 405")
@@ -102,7 +118,7 @@ class Protocol:
             print("sending 200")
             this.connectionSocket.send(b"200 OK  ")
             if batchedRequest:
-                this.parse(this.message[endIndex:], this.connectionSocket)
+                this.parse(excess, this.connectionSocket)
         print(f"Counter Store: {Protocol.counterStore}, Key Store: {Protocol.keyStore}")
 
     def get(this):
