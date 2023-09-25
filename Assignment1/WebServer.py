@@ -1,4 +1,5 @@
 import sys
+import re
 from socket import *
 
 
@@ -26,20 +27,19 @@ class Protocol:
 
     def parse(this, message, connectionSocket):
         this.connectionSocket = connectionSocket
-        print(f"The given message is {message}")
+        # isolate method
         methodEnd = 0
         for i in range(8):
             if message[i] == 32:
                 methodEnd = i
                 break
         method = message[0:methodEnd].decode().upper()
-        print(f"Method: {method}")
         this.keyOrCounter = (
             "key"
             if message[methodEnd + 2] == 107 or message[methodEnd + 2] == 75
             else "counter"
         )
-        print(f"keyOrCounter: {this.keyOrCounter}")
+        # isolate key/keyName
         keyNameStart = methodEnd + 6 if this.keyOrCounter == "key" else methodEnd + 10
         keyNameEnd = 0
         for i in range(keyNameStart, len(message)):
@@ -47,11 +47,10 @@ class Protocol:
                 keyNameEnd = i
                 break
         this.keyName = message[keyNameStart:keyNameEnd].decode()
-        print(f"keyName: {this.keyName}")
+        # truncate message to content-length and content body
         this.message = (
             message[keyNameEnd + 1 :] if method == "POST" else message[keyNameEnd + 2 :]
         )
-        print(f"The message right now is: {this.message}")
 
         if method == "POST":
             this.post()
@@ -60,7 +59,8 @@ class Protocol:
         else:
             this.delete()
 
-    def post(this):
+    # get rid of extra headers and isolate relevant info
+    def parsePostHeader(this):
         j = 0
         k = 0
         for i in range(len(this.message)):
@@ -71,58 +71,69 @@ class Protocol:
             if this.message[i] == 32:
                 k = i
                 break
-        contentLength = int(this.message[j + 8 : k].decode())
-        z = 0
-        for i in range(k, len(this.message) - 1):
-            if this.message[i] + this.message[i + 1] == 64:
-                z = i
-                break
-        content = this.message[z + 2 :]
-        excess = content[contentLength:]
-        content = content[0:contentLength]
-        print(
-            f"Content: {content} of length {len(content)}, Excess: {excess} of {len(excess)}"
-        )
+        contentLength = this.message[j + 8 : k].decode()
+        result = re.search("\D", contentLength)
+        if not result is None:
+            this.message = this.message[k + 1 :]
+            return this.parsePostHeader()
+        else:
+            contentLength = int(contentLength)
+            z = 0
+            for i in range(k, len(this.message) - 1):
+                if this.message[i] + this.message[i + 1] == 64:
+                    z = i
+                    break
+            content = this.message[z + 2 :]
+            excess = content[contentLength:]
+            content = content[0:contentLength]
+            this.message = this.message[z + 2 :]
+            contentExcess = []
+            contentExcess.insert(0, contentLength)
+            contentExcess.insert(1, content)
+            contentExcess.insert(2, excess)
+            return contentExcess
+
+    def post(this):
+        contentExcess = this.parsePostHeader()
+        contentLength = contentExcess[0]
+        content = contentExcess[1]
+        excess = contentExcess[2]
+
         batchedRequest = False
+        # if there is excess content, flip flag for batchedRequest
         if len(excess) != 0:
             batchedRequest = True
         if this.keyOrCounter == "key":
+            # 405 if positive counter
             if (this.keyName in Protocol.counterStore) and Protocol.counterStore[
                 this.keyName
             ][1] > 0:
-                print("sending 405")
                 this.connectionSocket.send(b"405 MethodNotAllowed  ")
             else:
+                # 200 if not
                 Protocol.keyStore[f"{this.keyName}"] = [contentLength, content]
-                print("sending 200")
-                print(
-                    f"Counter Store: {Protocol.counterStore}, Key Store: {Protocol.keyStore}"
-                )
                 this.connectionSocket.send(b"200 OK  ")
+                # pass the buck for batched request
             if batchedRequest:
-                print(f"Carrying on excess of: {excess}")
                 this.parse(excess, this.connectionSocket)
         elif this.keyOrCounter == "counter":
+            # 405 if key nonexistent in key-store
             if this.keyName not in Protocol.keyStore:
-                print("sending 405")
                 this.connectionSocket.send(b"405 MethodNotAllowed  ")
+            # increment remaining counter if key is already in counter-store
             elif this.keyName in Protocol.counterStore:
                 Protocol.counterStore[this.keyName][1] += int(content)
+            # post counter if not already in counter-store
             else:
                 Protocol.counterStore[f"{this.keyName}"] = [contentLength, int(content)]
-                print(
-                    f"Counter Store: {Protocol.counterStore}, Key Store: {Protocol.keyStore}"
-                )
-            print("sending 200")
             this.connectionSocket.send(b"200 OK  ")
+            # pass the buck for batched request
             if batchedRequest:
-                print(f"Carrying on excess of: {excess}")
                 this.parse(excess, this.connectionSocket)
-        print(f"Counter Store: {Protocol.counterStore}, Key Store: {Protocol.keyStore}")
 
     def get(this):
-        print(f"Fetching: {this.keyOrCounter}, {this.keyName}")
         if this.keyOrCounter == "key":
+            # build response message
             if this.keyName in Protocol.keyStore:
                 contentLength = Protocol.keyStore[this.keyName][0]
                 content = Protocol.keyStore[this.keyName][1]
@@ -132,35 +143,33 @@ class Protocol:
                     + b"  "
                     + content
                 )
+                # decrement remaining counter if key in counter-store, and delete it if counter has reached 0
                 if (this.keyName in Protocol.counterStore) and Protocol.counterStore[
                     this.keyName
                 ][1] > 0:
-                    print("sending 200")
                     this.connectionSocket.send(contentResponse)
                     Protocol.counterStore[this.keyName][1] -= 1
                     if Protocol.counterStore[this.keyName][1] == 0:
                         Protocol.counterStore.pop(this.keyName)
                         Protocol.keyStore.pop(this.keyName)
-                    print(
-                        f"Counter Store: {Protocol.counterStore}, Key Store: {Protocol.keyStore}"
-                    )
+                # 200 if key not in counter-store
                 else:
-                    print("sending 200")
                     this.connectionSocket.send(contentResponse)
+                # pass the buck if batched request
                 if not len(this.message) <= 14:
-                    print(f"Carrying on excess of: {this.message}")
                     this.parse(this.message, this.connectionSocket)
+            # 404 if key not in key-store
             else:
-                print("sending 404")
                 this.connectionSocket.send(b"404 NotFound  ")
         elif this.keyOrCounter == "counter":
+            # build response message
             if (
                 this.keyName not in Protocol.counterStore
                 and this.keyName not in Protocol.keyStore
             ):
-                print("sending 404")
                 this.connectionSocket.send(b"404 NotFound  ")
                 return
+            # 200 + remaining counter if key in counter-store
             if this.keyName in Protocol.counterStore:
                 contentLength = str(Protocol.counterStore[this.keyName][0])
                 content = str(Protocol.counterStore[this.keyName][1])
@@ -170,48 +179,44 @@ class Protocol:
                     + b"  "
                     + content.encode()
                 )
-                print("sending 200")
                 this.connectionSocket.send(contentResponse)
+            # 200 infinity if key not in counter-store but in key-store
             else:
                 contentResponse = b"200 OK Content-Length 8  Infinity"
-                print("sending 200")
                 this.connectionSocket.send(contentResponse)
+        # pass the buck if batched request
         if not len(this.message) <= 14:
-            print(f"Carrying on excess of: {this.message}")
             this.parse(this.message, this.connectionSocket)
-        print(f"Counter Store: {Protocol.counterStore}, Key Store: {Protocol.keyStore}")
 
     def delete(this):
-        print(f"Deleting: {this.keyOrCounter}, {this.keyName}")
         if this.keyOrCounter == "key":
+            # 404 if key not in key-store
             if this.keyName not in Protocol.keyStore:
-                print("sending 404")
                 this.connectionSocket.send(b"404 NotFound  ")
+            # 405 if positive remaining counter in counter-store
             elif (
                 this.keyName in Protocol.keyStore
                 and this.keyName in Protocol.counterStore
                 and Protocol.counterStore[this.keyName][1] > 0
             ):
-                print("sending 405")
                 this.connectionSocket.send(b"405 MethodNotAllowed  ")
+            # 200 if no more remaining counter in counter-store
             else:
                 contentLength = str(Protocol.keyStore[this.keyName][0])
                 content = Protocol.keyStore[this.keyName][1]
                 contentResponse = (
                     b"200 OK Content-Length " + contentLength.encode() + b"  " + content
                 )
-                print("sending 200")
                 Protocol.keyStore.pop(this.keyName)
-                print(
-                    f"Counter Store: {Protocol.counterStore}, Key Store: {Protocol.keyStore}"
-                )
                 this.connectionSocket.send(contentResponse)
+            # pass the buck if batched request
             if not len(this.message) <= 14:
-                print(f"Carrying on excess of: {this.message}")
                 this.parse(this.message, this.connectionSocket)
         elif this.keyOrCounter == "counter":
+            # 404 if key not in counter-store
             if this.keyName not in Protocol.counterStore:
                 this.connectionSocket.send(b"404 NotFound  ")
+            # 200 if key in counter-store
             else:
                 contentLength = str(Protocol.counterStore[this.keyName][0])
                 content = str(Protocol.counterStore[this.keyName][1])
@@ -222,15 +227,10 @@ class Protocol:
                     + content.encode()
                 )
                 Protocol.counterStore.pop(this.keyName)
-                print(
-                    f"Counter Store: {Protocol.counterStore}, Key Store: {Protocol.keyStore}"
-                )
-                print("sending 200")
                 this.connectionSocket.send(contentResponse)
+            # pass the buck if batched request
             if not len(this.message) <= 14:
-                print(f"Carrying on excess of: {this.message}")
                 this.parse(this.message, this.connectionSocket)
-        print(f"Counter Store: {Protocol.counterStore}, Key Store: {Protocol.keyStore}")
 
 
 def main():
@@ -240,7 +240,6 @@ def main():
         connectionSocket, clientAddr = serverSocket.accept()
         while True:
             message = connectionSocket.recv(2048)
-            print(f"Message Received Length: {len(message)}")
             if len(message) == 0:
                 connectionSocket.close()
                 break
