@@ -16,7 +16,6 @@ def echoServer():
 
 
 class Protocol:
-    # class fields: key-value and counter store
     keyStore = {}
     counterStore = {}
 
@@ -27,18 +26,32 @@ class Protocol:
 
     def parse(this, message, connectionSocket):
         this.connectionSocket = connectionSocket
-        this.message = message
-        # POST /key/key content-length 7  abcdefg
-        this.parsedMessage = this.message.split(" ")
-        print(f"The given message is {this.message}")
-        print(f"The parsed message is {this.parsedMessage}")
-        method = this.parsedMessage[0].upper()
-        path = this.parsedMessage[1]
-        pathParts = path.split("/")
-        this.keyOrCounter = pathParts[1].lower()
-        this.keyName = pathParts[2]
-        this.newParsedMessage = this.parsedMessage[2:]
-        print(this.newParsedMessage)
+        print(f"The given message is {message}")
+        methodEnd = 0
+        for i in range(8):
+            if message[i] == 32:
+                methodEnd = i
+                break
+        method = message[0:methodEnd].decode().upper()
+        print(f"Method: {method}")
+        this.keyOrCounter = (
+            "key"
+            if message[methodEnd + 2] == 107 or message[methodEnd + 2] == 75
+            else "counter"
+        )
+        print(f"keyOrCounter: {this.keyOrCounter}")
+        keyNameStart = methodEnd + 6 if this.keyOrCounter == "key" else methodEnd + 10
+        keyNameEnd = 0
+        for i in range(keyNameStart, len(message)):
+            if message[i] == 32:
+                keyNameEnd = i
+                break
+        this.keyName = message[keyNameStart:keyNameEnd].decode()
+        print(f"keyName: {this.keyName}")
+        this.message = (
+            message[keyNameEnd + 1 :] if method == "POST" else message[keyNameEnd + 2 :]
+        )
+        print(f"The message right now is: {this.message}")
 
         if method == "POST":
             this.post()
@@ -49,46 +62,30 @@ class Protocol:
 
     def post(this):
         j = 0
-        for i in range(len(this.newParsedMessage)):
-            if this.newParsedMessage[i].lower() == "content-length":
+        k = 0
+        for i in range(len(this.message)):
+            if this.message[i] == 45:
                 j = i
                 break
-        this.newParsedMessage = this.newParsedMessage[j:]
-        print(this.newParsedMessage)
-        # headerIndex = this.parsedMessage.index("content-length")
-        # this.parsedMessage = this.parsedMessage[headerIndex:]
-        # print(this.parsedMessage)
-        contentLength = int(this.newParsedMessage[1])
-        for i in range(len(this.newParsedMessage)):
-            if this.newParsedMessage[i] == "":
-                j = i + 1
+        for i in range(j + 8, len(this.message)):
+            if this.message[i] == 32:
+                k = i
                 break
-        this.newParsedMessage = this.newParsedMessage[j:]
-        print(this.newParsedMessage)
-        # contentLength = int(this.parsedMessage[3])
-        # for i in range(2, len(this.parsedMessage)):
-        # if this.parsedMessage[i] == "":
-        # break
-        # else:
-        # this.parsedMessage.remove(this.parsedMessage[i])
-        # print(this.parsedMessage)
-        # content = this.parsedMessage[5]
-        content = ""
-        for i in range(len(this.newParsedMessage)):
-            content += this.newParsedMessage[i] + " "
-        print(content)
-        excess = content[contentLength:-1]
+        contentLength = int(this.message[j + 8 : k].decode())
+        z = 0
+        for i in range(k, len(this.message) - 1):
+            if this.message[i] + this.message[i + 1] == 64:
+                z = i
+                break
+        content = this.message[z + 2 :]
+        excess = content[contentLength:]
         content = content[0:contentLength]
-        print(content, len(content), excess, len(excess))
-        numFiller = 28 if this.keyOrCounter == "key" else 32
+        print(
+            f"Content: {content} of length {len(content)}, Excess: {excess} of {len(excess)}"
+        )
         batchedRequest = False
-        endIndex = 0
-        if excess != "":
+        if len(excess) != 0:
             batchedRequest = True
-            # endIndex = (
-            #    numFiller + len(this.keyName) + len(str(contentLength)) + contentLength
-            # )
-            # content = content[0:contentLength]
         if this.keyOrCounter == "key":
             if (this.keyName in Protocol.counterStore) and Protocol.counterStore[
                 this.keyName
@@ -103,6 +100,7 @@ class Protocol:
                 )
                 this.connectionSocket.send(b"200 OK  ")
             if batchedRequest:
+                print(f"Carrying on excess of: {excess}")
                 this.parse(excess, this.connectionSocket)
         elif this.keyOrCounter == "counter":
             if this.keyName not in Protocol.keyStore:
@@ -118,27 +116,27 @@ class Protocol:
             print("sending 200")
             this.connectionSocket.send(b"200 OK  ")
             if batchedRequest:
+                print(f"Carrying on excess of: {excess}")
                 this.parse(excess, this.connectionSocket)
         print(f"Counter Store: {Protocol.counterStore}, Key Store: {Protocol.keyStore}")
 
     def get(this):
-        counter = 0
-        for i in range(len(this.message)):
-            if this.message[i] == " ":
-                counter += 1
+        print(f"Fetching: {this.keyOrCounter}, {this.keyName}")
         if this.keyOrCounter == "key":
             if this.keyName in Protocol.keyStore:
                 contentLength = Protocol.keyStore[this.keyName][0]
                 content = Protocol.keyStore[this.keyName][1]
-                numFiller = 11
                 contentResponse = (
-                    "200 OK Content-Length " + str(contentLength) + "  " + content
+                    b"200 OK Content-Length "
+                    + str(contentLength).encode()
+                    + b"  "
+                    + content
                 )
                 if (this.keyName in Protocol.counterStore) and Protocol.counterStore[
                     this.keyName
                 ][1] > 0:
                     print("sending 200")
-                    this.connectionSocket.send(contentResponse.encode())
+                    this.connectionSocket.send(contentResponse)
                     Protocol.counterStore[this.keyName][1] -= 1
                     if Protocol.counterStore[this.keyName][1] == 0:
                         Protocol.counterStore.pop(this.keyName)
@@ -148,15 +146,14 @@ class Protocol:
                     )
                 else:
                     print("sending 200")
-                    this.connectionSocket.send(contentResponse.encode())
-                if this.message[-1] != " " or counter > 3:
-                    endIndex = numFiller + len(this.keyName)
-                    this.parse(this.message[endIndex:], this.connectionSocket)
+                    this.connectionSocket.send(contentResponse)
+                if not len(this.message) <= 14:
+                    print(f"Carrying on excess of: {this.message}")
+                    this.parse(this.message, this.connectionSocket)
             else:
                 print("sending 404")
                 this.connectionSocket.send(b"404 NotFound  ")
         elif this.keyOrCounter == "counter":
-            numFiller = 15
             if (
                 this.keyName not in Protocol.counterStore
                 and this.keyName not in Protocol.keyStore
@@ -168,27 +165,25 @@ class Protocol:
                 contentLength = str(Protocol.counterStore[this.keyName][0])
                 content = str(Protocol.counterStore[this.keyName][1])
                 contentResponse = (
-                    "200 OK Content-Length " + contentLength + "  " + content
+                    b"200 OK Content-Length "
+                    + contentLength.encode()
+                    + b"  "
+                    + content.encode()
                 )
                 print("sending 200")
-                this.connectionSocket.send(contentResponse.encode())
+                this.connectionSocket.send(contentResponse)
             else:
-                contentResponse = "200 OK Content-Length 8  Infinity"
+                contentResponse = b"200 OK Content-Length 8  Infinity"
                 print("sending 200")
-                this.connectionSocket.send(contentResponse.encode())
-        if this.message[-1] != " " or counter > 3:
-            endIndex = numFiller + len(this.keyName)
-            print("im recursing")
-            this.parse(this.message[endIndex:], this.connectionSocket)
+                this.connectionSocket.send(contentResponse)
+        if not len(this.message) <= 14:
+            print(f"Carrying on excess of: {this.message}")
+            this.parse(this.message, this.connectionSocket)
         print(f"Counter Store: {Protocol.counterStore}, Key Store: {Protocol.keyStore}")
 
     def delete(this):
-        counter = 0
-        for i in range(len(this.message)):
-            if this.message[i] == " ":
-                counter += 1
+        print(f"Deleting: {this.keyOrCounter}, {this.keyName}")
         if this.keyOrCounter == "key":
-            numFiller = 14 + len(this.keyName)
             if this.keyName not in Protocol.keyStore:
                 print("sending 404")
                 this.connectionSocket.send(b"404 NotFound  ")
@@ -203,36 +198,38 @@ class Protocol:
                 contentLength = str(Protocol.keyStore[this.keyName][0])
                 content = Protocol.keyStore[this.keyName][1]
                 contentResponse = (
-                    "200 OK Content-Length " + contentLength + "  " + content
+                    b"200 OK Content-Length " + contentLength.encode() + b"  " + content
                 )
                 print("sending 200")
                 Protocol.keyStore.pop(this.keyName)
                 print(
                     f"Counter Store: {Protocol.counterStore}, Key Store: {Protocol.keyStore}"
                 )
-                this.connectionSocket.send(contentResponse.encode())
-            if this.message[-1] != " " or counter > 3:
-                endIndex = numFiller
-                this.parse(this.message[endIndex:], this.connectionSocket)
+                this.connectionSocket.send(contentResponse)
+            if not len(this.message) <= 14:
+                print(f"Carrying on excess of: {this.message}")
+                this.parse(this.message, this.connectionSocket)
         elif this.keyOrCounter == "counter":
-            numFiller = 18 + len(this.keyName)
             if this.keyName not in Protocol.counterStore:
                 this.connectionSocket.send(b"404 NotFound  ")
             else:
                 contentLength = str(Protocol.counterStore[this.keyName][0])
                 content = str(Protocol.counterStore[this.keyName][1])
                 contentResponse = (
-                    "200 OK Content-Length " + contentLength + "  " + content
+                    b"200 OK Content-Length "
+                    + contentLength.encode()
+                    + b"  "
+                    + content.encode()
                 )
                 Protocol.counterStore.pop(this.keyName)
                 print(
                     f"Counter Store: {Protocol.counterStore}, Key Store: {Protocol.keyStore}"
                 )
                 print("sending 200")
-                this.connectionSocket.send(contentResponse.encode())
-            if this.message[-1] != " " or counter > 3:
-                endIndex = numFiller
-                this.parse(this.message[endIndex:], this.connectionSocket)
+                this.connectionSocket.send(contentResponse)
+            if not len(this.message) <= 14:
+                print(f"Carrying on excess of: {this.message}")
+                this.parse(this.message, this.connectionSocket)
         print(f"Counter Store: {Protocol.counterStore}, Key Store: {Protocol.keyStore}")
 
 
@@ -247,7 +244,7 @@ def main():
             if len(message) == 0:
                 connectionSocket.close()
                 break
-            Protocol(message.decode(), connectionSocket)
+            Protocol(message, connectionSocket)
 
 
 if __name__ == "__main__":
