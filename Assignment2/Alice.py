@@ -4,19 +4,35 @@ from zlib import crc32
 
 
 def main():
-    serverPort = int(sys.argv[1])
-    serverSocket = socket(AF_INET, SOCK_DGRAM)
-    serverSocket.bind(("", serverPort))
+    serverName = ""
+    serverPort = sys.argv[1]
+    clientSocket = socket(AF_INET, SOCK_DGRAM)
+    clientSocket.settimeout(0.05)
+    lastSequenceNumber = 0
     while True:
-        segment, clientAddress = serverSocket.recvfrom(63)
-        expectedChecksum = int.from_bytes(segment[:4], byteorder=sys.byteorder)
-        actualChecksum = crc32(segment[4:])
-        if expectedChecksum != actualChecksum:
-            serverSocket.sendto(b"Packet corrupted", clientAddress)
-            continue
-        sys.stdout.write(segment[4:].decode())
-        sys.stdout.flush()
-        serverSocket.sendto(b"Packet ok", clientAddress)
+        message = sys.stdin.read(59)
+        if len(message) == 0:
+            clientSocket.close()
+            break
+        thisSequenceNumber = lastSequenceNumber.to_bytes(1, byteorder=sys.byteorder)
+        data = thisSequenceNumber + message.encode()
+        checksum = crc32(data).to_bytes(4, byteorder=sys.byteorder)
+        segment = checksum + data
+        modifiedMessage = b""
+        while True:
+            try:
+                clientSocket.sendto(segment, (serverName, int(serverPort)))
+                modifiedMessage, serverAddress = clientSocket.recvfrom(64)
+                while (
+                    modifiedMessage.decode()
+                    != "Packet " + str(lastSequenceNumber) + " received ok"
+                ):
+                    clientSocket.sendto(segment, (serverName, int(serverPort)))
+                    modifiedMessage, serverAddress = clientSocket.recvfrom(64)
+                lastSequenceNumber += 1
+                break
+            except TimeoutError:
+                continue
 
 
 if __name__ == "__main__":

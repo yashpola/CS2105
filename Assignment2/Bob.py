@@ -4,22 +4,36 @@ from zlib import crc32
 
 
 def main():
-    serverName = ""
-    serverPort = sys.argv[1]
-    clientSocket = socket(AF_INET, SOCK_DGRAM)
-    fullMessage = ""
+    serverPort = int(sys.argv[1])
+    serverSocket = socket(AF_INET, SOCK_DGRAM)
+    serverSocket.bind(("", serverPort))
+    lastReceivedSequenceNumber = -1
     while True:
-        message = sys.stdin.read(59)
-        if len(message) == 0:
-            clientSocket.close()
-            break
-        checksum = crc32(message.encode())
-        segment = checksum.to_bytes(4, byteorder=sys.byteorder) + message.encode()
-        clientSocket.sendto(segment, (serverName, int(serverPort)))
-        modifiedMessage, serverAddress = clientSocket.recvfrom(64)
-        while modifiedMessage.decode() != "Packet ok":
-            clientSocket.sendto(segment, (serverName, int(serverPort)))
-            modifiedMessage, serverAddress = clientSocket.recvfrom(64)
+        segment, clientAddress = serverSocket.recvfrom(64)
+        expectedChecksum = int.from_bytes(segment[:4], byteorder=sys.byteorder)
+        actualChecksum = crc32(segment[4:])
+        if expectedChecksum != actualChecksum:
+            serverSocket.sendto(b"Packet corrupted", clientAddress)
+            continue
+        sequenceNumber = int.from_bytes(segment[4:5], byteorder=sys.byteorder)
+        if sequenceNumber != lastReceivedSequenceNumber + 1:
+            if sequenceNumber < lastReceivedSequenceNumber + 1:
+                responseMessage = "Packet " + str(sequenceNumber) + " received ok"
+                serverSocket.sendto(responseMessage.encode(), clientAddress)
+            else:
+                responseMessage = (
+                    "Expected Packet "
+                    + str(lastReceivedSequenceNumber + 1)
+                    + ". Got Packet "
+                    + str(sequenceNumber)
+                )
+                serverSocket.sendto(responseMessage.encode(), clientAddress)
+            continue
+        lastReceivedSequenceNumber += 1
+        sys.stdout.write(segment[5:].decode())
+        sys.stdout.flush()
+        responseMessage = "Packet " + str(sequenceNumber) + " received ok"
+        serverSocket.sendto(responseMessage.encode(), clientAddress)
 
 
 if __name__ == "__main__":
